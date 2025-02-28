@@ -57,4 +57,5 @@ jobs:
           override: true
 
       - name: Build
-        run: cargo build --all-features --target x86_64-unknown-linux-gnu
+        # don’t build with littlefs2 feature as it requires a newer Rust version
+        run: cargo build --target x86_64-unknown-linux-gnu
