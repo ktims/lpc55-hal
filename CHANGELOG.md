@@ -5,8 +5,19 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+-
+
+## [v0.5.0](https://github.com/lpc55/lpc55-hal/releases/tag/0.5.0) - 2026-03-20
+
 - Document the MSRV 1.74
-- Update `littlefs2` to 0.7
+- Remove `lpc55-rtic` feature
+- Update dependencies to:
+  - `block-buffer` 0.10
+  - `cipher` 0.4
+  - `digest` 0.10
+  - `generic-array` 1
+  - `littlefs2` 0.7
+  - `lpc55-pac` 0.5
 
 ## [v0.4.1](https://github.com/lpc55/lpc55-hal/releases/tag/0.4.1) - 2025-02-28
 
