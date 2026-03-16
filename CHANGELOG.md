@@ -5,7 +5,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
--
+- Document the MSRV 1.74
 
 ## [v0.4.1](https://github.com/lpc55/lpc55-hal/releases/tag/0.4.1) - 2025-02-28
 
