@@ -4,7 +4,10 @@ use core::marker::PhantomData;
 
 use cortex_m::interrupt::{CriticalSection, Mutex};
 
-use usb_device::{endpoint::EndpointType, Result, UsbError};
+use usb_device::{
+    endpoint::{EndpointType, IsochronousUsageType},
+    Result, UsbError,
+};
 
 use crate::traits::usb::Usb;
 use crate::typestates::init_state;
@@ -81,6 +84,14 @@ where
         let len = buf.capacity() as u16;
         let i = self.index as usize;
 
+        let t = match self.ep_type {
+            Some(EndpointType::Isochronous {
+                synchronization: _,
+                usage: _,
+            }) => true,
+            _ => false,
+        };
+
         epl.eps[i].ep_out[0].modify(|_, w| {
             w.nbytes::<USB>()
                 .bits(len)
@@ -92,6 +103,8 @@ where
                 .enabled() // technically, marked as R (for reserved?) for EP0
                 .s()
                 .not_stalled()
+                .t()
+                .bit(t)
         });
     }
 
@@ -166,6 +179,14 @@ where
                     .not_stalled()
             });
         } else {
+            let t = match self.ep_type {
+                Some(EndpointType::Isochronous {
+                    synchronization: _,
+                    usage: _,
+                }) => true,
+                _ => false,
+            };
+
             epl.eps[i].ep_in[0].modify(|_, w| {
                 w.nbytes::<USB>()
                     .bits(0)
@@ -175,6 +196,8 @@ where
                     .enabled()
                     .s()
                     .not_stalled()
+                    .t()
+                    .bit(t)
             });
         }
     }
@@ -186,7 +209,13 @@ where
         };
 
         // no support for Isochronous endpoints
-        debug_assert!(ep_type != EndpointType::Isochronous);
+        debug_assert!(!matches!(
+            ep_type,
+            EndpointType::Isochronous {
+                synchronization,
+                usage
+            }
+        ));
 
         // clear all the interrupts
         usb.intstat.write(|w| unsafe { w.bits(!0) });
@@ -295,18 +324,18 @@ where
 
             unsafe { usb.intstat.write(|w| w.bits(ep_out_mask)) };
 
-            // self.reset_out_buf(cs, epl);
-            epl.eps[i].ep_out[0].modify(
-                |_, w| {
-                    w.nbytes::<USB>()
-                        .bits(out_buf.capacity() as u16)
-                        .addroff::<USB>()
-                        .bits(self.buf_addroff(out_buf))
-                        .a()
-                        .active()
-                }, // .d().enabled()
-                   // .s().not_stalled()
-            );
+            self.reset_out_buf(cs, epl);
+            // epl.eps[i].ep_out[0].modify(
+            //     |_, w| {
+            //         w.nbytes::<USB>()
+            //             .bits(out_buf.capacity() as u16)
+            //             .addroff::<USB>()
+            //             .bits(self.buf_addroff(out_buf))
+            //             .a()
+            //             .active()
+            //     }, // .d().enabled()
+            //        // .s().not_stalled()
+            // );
 
             Ok(count)
         } else {

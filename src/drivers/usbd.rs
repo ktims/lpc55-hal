@@ -267,65 +267,74 @@ where
     }
 
     fn poll(&self) -> PollResult {
-        interrupt::free(|cs| {
-            let usb = self.usb_regs.borrow(cs);
-            let eps = self.ep_regs.borrow(cs);
-            // WOAH WHYY DOES IT WORK WITH THIS??
-            // cortex_m_semihosting::hprintln!("inten = {:#X}", usb.inten.read().bits()).ok();
-            // let _ = usb.inten.read().bits();
+        // WOAH WHYY DOES IT WORK WITH THIS??
+        // cortex_m_semihosting::hprintln!("inten = {:#X}", usb.inten.read().bits()).ok();
+        // let _ = usb.inten.read().bits();
 
-            let devcmdstat = &usb.devcmdstat;
-            let intstat = &usb.intstat;
+        // let ints = intstat.read().bits();
+        // if ints != 0 {
+        //     cortex_m_semihosting::hprintln!("intstat = {:?}", intstat.read().bits()).ok();
+        //     cortex_m_semihosting::hprintln!("inten = {:?}", usb.inten.read().bits()).ok();
+        // }
 
-            // let ints = intstat.read().bits();
-            // if ints != 0 {
-            //     cortex_m_semihosting::hprintln!("intstat = {:?}", intstat.read().bits()).ok();
-            //     cortex_m_semihosting::hprintln!("inten = {:?}", usb.inten.read().bits()).ok();
-            // }
+        // if intstat.read().dev_int().bit_is_set() {
+        //     usb.intstat.write(|w| w.dev_int().set_bit());
+        // }
 
-            // if intstat.read().dev_int().bit_is_set() {
-            //     usb.intstat.write(|w| w.dev_int().set_bit());
-            // }
-
-            // Bus reset flag?
+        // Bus reset flag?
+        if let Some(r) = interrupt::free(|cs| {
+            let devcmdstat = &self.usb_regs.borrow(cs).devcmdstat;
             if devcmdstat.read().dres_c().bit_is_set() {
                 devcmdstat.modify(|_, w| w.dres_c().set_bit());
                 // debug_assert!(devcmdstat.read().dres_c().bit_is_clear());
-                return PollResult::Reset;
+                return Some(PollResult::Reset);
             }
+            None
+        }) {
+            return r;
+        }
 
-            // if devcmdstat.read().dsus_c().bit_is_set() {
-            //     cortex_m_semihosting::hprintln!("suspend bit set!").ok();
-            // }
+        // if devcmdstat.read().dsus_c().bit_is_set() {
+        //     cortex_m_semihosting::hprintln!("suspend bit set!").ok();
+        // }
 
-            // if devcmdstat.read().dsus_c().bit_is_set() {
-            //     cortex_m_semihosting::hprintln!("device suspended!").ok();
-            // }
+        // if devcmdstat.read().dsus_c().bit_is_set() {
+        //     cortex_m_semihosting::hprintln!("device suspended!").ok();
+        // }
 
-            // if devcmdstat.read().dcon_c().bit_is_set() {
-            //     cortex_m_semihosting::hprintln!("connect bit set!").ok();
-            // }
+        // if devcmdstat.read().dcon_c().bit_is_set() {
+        //     cortex_m_semihosting::hprintln!("connect bit set!").ok();
+        // }
 
-            // TODO: Resume, Suspend handling
+        // TODO: Resume, Suspend handling
 
-            let mut ep_out = 0;
-            let mut ep_in_complete = 0;
-            let mut ep_setup = 0;
+        let mut ep_out = 0;
+        let mut ep_in_complete = 0;
+        let mut ep_setup = 0;
 
-            let mut bit = 1;
+        let mut bit = 1;
 
-            // NB: these are not "reader objects", but the actual value
-            // of the registers at time of assignment :))
-            let intstat_r = intstat.read();
+        // NB: these are not "reader objects", but the actual value
+        // of the registers at time of assignment :))
+        let intstat_r = interrupt::free(|cs| self.usb_regs.borrow(cs).intstat.read());
 
-            // First handle endpoint 0 (the only control endpoint)
-            if intstat_r.ep0out().bit_is_set() {
-                ep_out |= bit;
-            }
-            if devcmdstat.read().setup().bit_is_set() {
-                ep_setup |= bit;
-            }
+        if intstat_r.bits() == 0 {
+            return PollResult::None;
+        }
 
+        // First handle endpoint 0 (the only control endpoint)
+        if intstat_r.ep0out().bit_is_set() {
+            ep_out |= bit;
+        }
+        if interrupt::free(|cs| self.usb_regs.borrow(cs).devcmdstat.read())
+            .setup()
+            .bit_is_set()
+        {
+            ep_setup |= bit;
+        }
+        interrupt::free(|cs| {
+            let intstat = &self.usb_regs.borrow(cs).intstat;
+            let eps = self.ep_regs.borrow(cs);
             if intstat_r.ep0in().bit_is_set() {
                 intstat.write(|w| w.ep0in().set_bit());
                 debug_assert!(intstat.read().ep0in().bit_is_clear());
@@ -338,72 +347,90 @@ where
                 // prevents OUT-DATA-NAK
                 // modify_endpoint!(endpoint_list, eps, EP0OUT, A: Active);
             }
+        });
 
-            // non-CONTROL
-            for ep in &self.endpoints[1..=self.max_endpoint] {
-                bit <<= 1;
-                let i = ep.index() as usize;
+        // non-CONTROL
+        for ep in &self.endpoints[1..=self.max_endpoint] {
+            bit <<= 1;
+            let i = ep.index() as usize;
 
-                // OUT = READ
-                let out_offset = 2 * i;
-                let out_int = ((intstat_r.bits() >> out_offset) & 0x1) != 0;
-                let out_inactive = eps.eps[i].ep_out[0].read().a().is_not_active();
+            // OUT = READ
+            let out_offset = 2 * i;
+            let out_int = ((intstat_r.bits() >> out_offset) & 0x1) != 0;
+            let out_inactive =
+                interrupt::free(|cs| self.ep_regs.borrow(cs).eps[i].ep_out[0].read())
+                    .a()
+                    .is_not_active();
 
-                if out_int {
-                    debug_assert!(out_inactive);
-                    ep_out |= bit;
-                    // EXPERIMENTAL: clear interrupt
-                    // usb.intstat.write(|w| unsafe { w.bits(1u32 << out_offset) } );
+            if out_int {
+                debug_assert!(out_inactive);
+                ep_out |= bit;
+                // EXPERIMENTAL: clear interrupt
+                // usb.intstat.write(|w| unsafe { w.bits(1u32 << out_offset) } );
 
-                    // let err_code = usb.info.read().err_code().bits();
-                    // let addr_set = devcmdstat.read().dev_addr().bits() > 0;
-                    // if addr_set && err_code > 0 {
-                    //     hprintln!("error {}", err_code).ok();
-                    // }
-                }
-
-                // IN = WRITE
-                let in_offset = 2 * i + 1;
-                let in_int = ((intstat_r.bits() >> in_offset) & 0x1) != 0;
-                // WHYY is this sometimes still active?
-                let in_inactive = eps.eps[i].ep_in[0].read().a().is_not_active();
-                if in_int && !in_inactive {
-                    // cortex_m_semihosting::hprintln!(
-                    //     "IN is active for EP {}, but an IN interrupt fired", i,
-                    // ).ok();
-                    // cortex_m_semihosting::hprintln!(
-                    //     "IntOnNAK_AI = {}, IntOnNAK_AO = {}",
-                    //     devcmdstat.read().intonnak_ai().is_enabled(),
-                    //     devcmdstat.read().intonnak_ao().is_enabled(),
-                    // ).ok();
-
-                    // debug_assert!(in_inactive);
-                }
-                if in_int && in_inactive {
-                    ep_in_complete |= bit;
-                    // clear it
-                    usb.intstat.write(|w| unsafe { w.bits(1u32 << in_offset) });
-                    debug_assert!(eps.eps[i].ep_in[0].read().a().is_not_active());
-
-                    // let err_code = usb.info.read().err_code().bits();
-                    // let addr_set = devcmdstat.read().dev_addr().bits() > 0;
-                    // if addr_set && err_code > 0 {
-                    //     hprintln!("error {}", err_code).ok();
-                    // }
-                };
+                // let err_code = usb.info.read().err_code().bits();
+                // let addr_set = devcmdstat.read().dev_addr().bits() > 0;
+                // if addr_set && err_code > 0 {
+                //     hprintln!("error {}", err_code).ok();
+                // }
             }
 
-            usb.intstat.write(|w| w.dev_int().set_bit());
-            if (ep_out | ep_in_complete | ep_setup) != 0 {
-                PollResult::Data {
-                    ep_out,
-                    ep_in_complete,
-                    ep_setup,
-                }
-            } else {
-                PollResult::None
+            // IN = WRITE
+            let in_offset = 2 * i + 1;
+            let in_int = ((intstat_r.bits() >> in_offset) & 0x1) != 0;
+            // WHYY is this sometimes still active?
+            let in_inactive = interrupt::free(|cs| self.ep_regs.borrow(cs).eps[i].ep_in[0].read())
+                .a()
+                .is_not_active();
+            if in_int && !in_inactive {
+                // cortex_m_semihosting::hprintln!(
+                //     "IN is active for EP {}, but an IN interrupt fired", i,
+                // ).ok();
+                // cortex_m_semihosting::hprintln!(
+                //     "IntOnNAK_AI = {}, IntOnNAK_AO = {}",
+                //     devcmdstat.read().intonnak_ai().is_enabled(),
+                //     devcmdstat.read().intonnak_ao().is_enabled(),
+                // ).ok();
+
+                // debug_assert!(in_inactive);
             }
-        })
+            if in_int && in_inactive {
+                ep_in_complete |= bit;
+                // clear it
+                interrupt::free(|cs| {
+                    self.usb_regs
+                        .borrow(cs)
+                        .intstat
+                        .write(|w| unsafe { w.bits(1u32 << in_offset) });
+                    debug_assert!(self.ep_regs.borrow(cs).eps[i].ep_in[0]
+                        .read()
+                        .a()
+                        .is_not_active());
+                });
+
+                // let err_code = usb.info.read().err_code().bits();
+                // let addr_set = devcmdstat.read().dev_addr().bits() > 0;
+                // if addr_set && err_code > 0 {
+                //     hprintln!("error {}", err_code).ok();
+                // }
+            };
+        }
+
+        interrupt::free(|cs| {
+            self.usb_regs
+                .borrow(cs)
+                .intstat
+                .write(|w| w.dev_int().set_bit())
+        });
+        if (ep_out | ep_in_complete | ep_setup) != 0 {
+            PollResult::Data {
+                ep_out,
+                ep_in_complete,
+                ep_setup,
+            }
+        } else {
+            PollResult::None
+        }
     }
 
     fn read(&self, ep_addr: EndpointAddress, buf: &mut [u8]) -> Result<usize> {
